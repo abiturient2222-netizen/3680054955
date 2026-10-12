@@ -1,0 +1,174 @@
+name: Build Smooth Scroll Mod 1.16.5
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Setup Gradle 7.6
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 7.6
+
+      - name: Generate Project Files
+        run: |
+          mkdir -p src/main/resources/META-INF
+          mkdir -p src/main/java/com/smoothscroll/mod
+          
+          cat << 'EOF' > settings.gradle
+          rootProject.name = 'SmoothScroll'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  maven { url = 'https://maven.minecraftforge.net' }
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath group: 'net.minecraftforge.gradle', name: 'ForgeGradle', version: '5.1.+', changing: true
+              }
+          }
+          apply plugin: 'net.minecraftforge.gradle'
+
+          version = '1.0.0'
+          group = 'com.smoothscroll.mod'
+          archivesBaseName = 'SmoothScroll-1.16.5'
+
+          java.toolchain.languageVersion = JavaLanguageVersion.of(8)
+
+          minecraft {
+              mappings channel: 'official', version: '1.16.5'
+          }
+
+          dependencies {
+              minecraft 'net.minecraftforge:forge:1.16.5-36.2.39'
+          }
+          EOF
+
+          cat << 'EOF' > src/main/resources/META-INF/mods.toml
+          modLoader="javafml"
+          loaderVersion="[36,)"
+          license="MIT"
+
+          [[mods]]
+          modId="smoothscroll"
+          version="1.0.0"
+          displayName="Smooth Scroll Mod"
+          authors="Developer"
+          description="Плавная прокрутка меню и настроек для Minecraft 1.16.5"
+
+          [[dependencies.smoothscroll]]
+              modId="forge"
+              mandatory=true
+              versionRange="[36.2.0,)"
+              ordering="NONE"
+              side="BOTH"
+          EOF
+
+          cat << 'EOF' > src/main/java/com/smoothscroll/mod/SmoothScrollMod.java
+          package com.smoothscroll.mod;
+
+          import net.minecraft.client.Minecraft;
+          import net.minecraft.client.gui.screen.Screen;
+          import net.minecraft.client.gui.widget.list.AbstractList;
+          import net.minecraftforge.api.distmarker.Dist;
+          import net.minecraftforge.client.event.GuiScreenEvent;
+          import net.minecraftforge.common.MinecraftForge;
+          import net.minecraftforge.event.TickEvent;
+          import net.minecraftforge.eventbus.api.SubscribeEvent;
+          import net.minecraftforge.fml.common.Mod;
+
+          @Mod("smoothscroll")
+          public class SmoothScrollMod {
+
+              public SmoothScrollMod() {
+                  MinecraftForge.EVENT_BUS.register(this);
+              }
+
+              @Mod.EventBusSubscriber(modid = "smoothscroll", value = Dist.CLIENT)
+              public static class ClientEvents {
+                  private static double targetScroll = 0;
+                  private static double currentScroll = 0;
+                  private static AbstractList<?> activeList = null;
+
+                  @SubscribeEvent
+                  public static void onMouseScroll(GuiScreenEvent.MouseScrollEvent.Pre event) {
+                      Screen screen = event.getGui();
+                      if (screen == null) return;
+
+                      double scrollDelta = event.getScrollDelta();
+                      if (scrollDelta == 0) return;
+
+                      AbstractList<?> list = findList(screen, event.getMouseX(), event.getMouseY());
+                      if (list != null) {
+                          if (activeList != list) {
+                              activeList = list;
+                              currentScroll = list.getScrollAmount();
+                              targetScroll = currentScroll;
+                          }
+
+                          // Скорость и плавность шага
+                          double scrollSpeed = 28.0;
+                          targetScroll -= scrollDelta * scrollSpeed;
+
+                          // Отменяем стандартную резкую прокрутку
+                          event.setCanceled(true);
+                      }
+                  }
+
+                  @SubscribeEvent
+                  public static void onRenderTick(TickEvent.RenderTickEvent event) {
+                      if (event.phase != TickEvent.Phase.START) return;
+
+                      Screen currentScreen = Minecraft.getInstance().screen;
+                      if (currentScreen == null) {
+                          activeList = null;
+                          return;
+                      }
+
+                      if (activeList != null) {
+                          // Плавное приближение позиции к целевой (LERP-сглаживание)
+                          double diff = targetScroll - currentScroll;
+                          if (Math.abs(diff) > 0.05) {
+                              currentScroll += diff * 0.22; // 0.22 = эффект мягкого скольжения
+                              activeList.setScrollAmount(currentScroll);
+                          } else {
+                              currentScroll = targetScroll;
+                              activeList.setScrollAmount(targetScroll);
+                          }
+                      }
+                  }
+
+                  private static AbstractList<?> findList(Screen screen, double mouseX, double mouseY) {
+                      for (Object widget : screen.children()) {
+                          if (widget instanceof AbstractList) {
+                              AbstractList<?> list = (AbstractList<?>) widget;
+                              if (list.isMouseOver(mouseX, mouseY)) {
+                                  return list;
+                              }
+                          }
+                      }
+                      return null;
+                  }
+              }
+          }
+          EOF
+
+      - name: Build Mod
+        run: gradle build --no-daemon
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmoothScroll-Mod-1.16.5
+          path: build/libs/*.jar
